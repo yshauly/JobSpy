@@ -183,7 +183,10 @@ class Google(Scraper):
             days_ago = int(match.group()) if match else None
             date_posted = (datetime.now() - timedelta(days=days_ago)).date()
 
-        description = job_info[19]
+        raw_description = job_info[19]
+        description = (
+            raw_description if raw_description and self.claim_description_slot() else None
+        )
 
         job_post = JobPost(
             id=f"go-{job_info[28]}",
@@ -194,9 +197,10 @@ class Google(Scraper):
             ),
             job_url=job_url,
             date_posted=date_posted,
-            is_remote="remote" in description.lower() or "wfh" in description.lower(),
+            is_remote="remote" in (description or "").lower()
+            or "wfh" in (description or "").lower(),
             description=description,
             emails=extract_emails_from_text(description),
-            job_type=extract_job_type(description),
+            job_type=extract_job_type(description or ""),
         )
         return job_post

@@ -1,9 +1,11 @@
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
-from typing import Optional
 from datetime import date
 from enum import Enum
+from threading import Lock
+from typing import Any, Optional
+
 from pydantic import BaseModel
 
 
@@ -93,7 +95,7 @@ class Country(Enum):
     INDIA = ("india", "in", "co.in")
     INDONESIA = ("indonesia", "id")
     IRELAND = ("ireland", "ie", "ie")
-    ISRAEL = ("israel", "il")
+    ISRAEL = ("israel", "il", "com")
     ITALY = ("italy", "it", "it")
     JAPAN = ("japan", "jp")
     KUWAIT = ("kuwait", "kw")
@@ -241,6 +243,7 @@ class JobPost(BaseModel):
     title: str
     company_name: str | None
     job_url: str
+    apply_url: str | None = None
     job_url_direct: str | None = None
     location: Optional[Location]
 
@@ -254,6 +257,7 @@ class JobPost(BaseModel):
     emails: list[str] | None = None
     is_remote: bool | None = None
     listing_type: str | None = None
+    applications_count: int | None = None
 
     # LinkedIn specific
     job_level: str | None = None
@@ -290,9 +294,32 @@ class Site(Enum):
     ZIP_RECRUITER = "zip_recruiter"
     GLASSDOOR = "glassdoor"
     GOOGLE = "google"
+    GOOGLE_CAREERS = "google_careers"
+    COMEET = "comeet"
+    GREENHOUSE = "greenhouse"
+    EIGHTFOLD = "eightfold"
+    WORKDAY = "workday"
+    REDHAT = "redhat"
+    VARONIS = "varonis"
+    APPLE = "apple"
+    MICROSOFT = "microsoft"
+    META = "meta"
+    JSON_FEED = "json_feed"
     BAYT = "bayt"
     NAUKRI = "naukri"
     BDJOBS = "bdjobs"  # Add this line
+
+
+class LinkedInScrapeMode(str, Enum):
+    DEFAULT = "default"
+    UNTIL_LAST_PAGE = "until-last-page"
+    INSPECT_SINGLE_JOB = "inspect-single-job"
+    INSPECT_SINGLE_PROFILE = "inspect-single-profile"
+
+
+class GreenhouseScrapeMode(str, Enum):
+    DEFAULT = "default"
+    UNTIL_LAST_PAGE = "until-last-page"
 
 
 class SalarySource(Enum):
@@ -304,6 +331,17 @@ class ScraperInput(BaseModel):
     site_type: list[Site]
     search_term: str | None = None
     google_search_term: str | None = None
+    google_careers_url: str | None = None
+    comeet_company_url: str | None = None
+    eightfold_company_url: str | None = None
+    workday_company_url: str | None = None
+    redhat_base_url: str | None = None
+    varonis_base_url: str | None = None
+    apple_search_url: str | None = None
+    microsoft_base_url: str | None = None
+    meta_careers_url: str | None = None
+    json_feed_url: str | None = None
+    json_feed_config: dict[str, Any] | None = None
 
     location: str | None = None
     country: Country | None = Country.USA
@@ -314,7 +352,27 @@ class ScraperInput(BaseModel):
     offset: int = 0
     linkedin_fetch_description: bool = False
     linkedin_company_ids: list[int] | None = None
+    linkedin_geo_id: int | None = None
+    linkedin_page_delay_min: float | None = None
+    linkedin_page_delay_max: float | None = None
+    linkedin_execution_mode: LinkedInScrapeMode = LinkedInScrapeMode.DEFAULT
+    greenhouse_execution_mode: GreenhouseScrapeMode = GreenhouseScrapeMode.DEFAULT
+    num_of_min: int | None = None
     description_format: DescriptionFormat | None = DescriptionFormat.MARKDOWN
+    description_limit: int | None = 1
+    indeed_debug_trace: bool = False
+    comeet_debug_trace: bool = False
+    eightfold_debug_trace: bool = False
+    workday_debug_trace: bool = False
+    redhat_debug_trace: bool = False
+    varonis_debug_trace: bool = False
+    greenhouse_location_name: str | None = None
+    greenhouse_lat: float | None = None
+    greenhouse_lon: float | None = None
+    greenhouse_location_type: str | None = None
+    greenhouse_country_short_name: str | None = None
+    greenhouse_date_posted: str | None = None
+    greenhouse_debug_trace: bool = False
 
     request_timeout: int = 60
 
@@ -330,6 +388,25 @@ class Scraper(ABC):
         self.proxies = proxies
         self.ca_cert = ca_cert
         self.user_agent = user_agent
+        self._description_slot_lock = Lock()
+        self._claimed_description_slots = 0
+
+    def claim_description_slot(self) -> bool:
+        scraper_input = getattr(self, "scraper_input", None)
+        if scraper_input is None:
+            return False
+
+        limit = scraper_input.description_limit
+        if limit is None:
+            return True
+        if limit <= 0:
+            return False
+
+        with self._description_slot_lock:
+            if self._claimed_description_slots >= limit:
+                return False
+            self._claimed_description_slots += 1
+            return True
 
     @abstractmethod
     def scrape(self, scraper_input: ScraperInput) -> JobResponse: ...

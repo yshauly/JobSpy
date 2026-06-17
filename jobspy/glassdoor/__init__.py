@@ -2,10 +2,10 @@ from __future__ import annotations
 
 import re
 import json
+import time
 import requests
 from typing import Tuple
 from datetime import datetime, timedelta
-from concurrent.futures import ThreadPoolExecutor, as_completed
 
 from jobspy.glassdoor.constant import fallback_token, query_template, headers
 from jobspy.glassdoor.util import (
@@ -48,6 +48,7 @@ class Glassdoor(Scraper):
         self.scraper_input = None
         self.jobs_per_page = 30
         self.max_pages = 30
+        self.description_sleep_seconds = 0.15
         self.seen_urls = set()
 
     def scrape(self, scraper_input: ScraperInput) -> JobResponse:
@@ -94,6 +95,8 @@ class Glassdoor(Scraper):
             except Exception as e:
                 log.error(f"Glassdoor: {str(e)}")
                 break
+
+        self._hydrate_descriptions(job_list)
         return JobResponse(jobs=job_list)
 
     def _fetch_jobs_page(
@@ -120,8 +123,17 @@ class Glassdoor(Scraper):
                 exc_msg = f"bad response status code: {response.status_code}"
                 raise GlassdoorException(exc_msg)
             res_json = response.json()[0]
-            if "errors" in res_json:
+            jobs_data = (
+                res_json.get("data", {})
+                .get("jobListings", {})
+                .get("jobListings", [])
+            )
+            if "errors" in res_json and not jobs_data:
                 raise ValueError("Error encountered in API response")
+            if "errors" in res_json and jobs_data:
+                log.warning(
+                    "Glassdoor returned partial GraphQL errors; continuing with available job listings"
+                )
         except (
             requests.exceptions.ReadTimeout,
             GlassdoorException,
@@ -131,19 +143,10 @@ class Glassdoor(Scraper):
             log.error(f"Glassdoor: {str(e)}")
             return jobs, None
 
-        jobs_data = res_json["data"]["jobListings"]["jobListings"]
-
-        with ThreadPoolExecutor(max_workers=self.jobs_per_page) as executor:
-            future_to_job_data = {
-                executor.submit(self._process_job, job): job for job in jobs_data
-            }
-            for future in as_completed(future_to_job_data):
-                try:
-                    job_post = future.result()
-                    if job_post:
-                        jobs.append(job_post)
-                except Exception as exc:
-                    raise GlassdoorException(f"Glassdoor generated an exception: {exc}")
+        for job in jobs_data:
+            job_post = self._process_job(job, fetch_description=False)
+            if job_post:
+                jobs.append(job_post)
 
         return jobs, get_cursor_for_page(
             res_json["data"]["jobListings"]["paginationCursors"], page_num + 1
@@ -161,7 +164,7 @@ class Glassdoor(Scraper):
             token = matches[0]
         return token
 
-    def _process_job(self, job_data):
+    def _process_job(self, job_data, fetch_description: bool = False):
         """
         Processes a single job and fetches its description.
         """
@@ -187,10 +190,12 @@ class Glassdoor(Scraper):
             location = parse_location(location_name)
 
         compensation = parse_compensation(job["header"])
-        try:
-            description = self._fetch_job_description(job_id)
-        except:
-            description = None
+        description = None
+        if fetch_description:
+            try:
+                description = self._fetch_job_description(job_id)
+            except:
+                description = None
         company_url = f"{self.base_url}Overview/W-EI_IE{company_id}.htm"
         company_logo = (
             job_data["jobview"].get("overview", {}).get("squareLogoUrl", None)
@@ -246,20 +251,55 @@ class Glassdoor(Scraper):
                 """,
             }
         ]
-        res = requests.post(url, json=body, headers=headers)
+        res = self.session.post(
+            url,
+            json=body,
+            timeout_seconds=15,
+        )
         if res.status_code != 200:
             return None
         data = res.json()[0]
-        desc = data["data"]["jobview"]["job"]["description"]
+        desc = data.get("data", {}).get("jobview", {}).get("job", {}).get("description")
+        if not desc:
+            return None
         if self.scraper_input.description_format == DescriptionFormat.MARKDOWN:
             desc = markdown_converter(desc)
         return desc
 
+    def _hydrate_descriptions(self, job_list: list[JobPost]) -> None:
+        if not job_list:
+            return
+
+        limit = self.scraper_input.description_limit
+        if limit is not None and limit <= 0:
+            return
+
+        jobs_to_describe = job_list if limit is None else job_list[:limit]
+        for index, job in enumerate(jobs_to_describe):
+            job_id = (job.id or "").removeprefix("gd-")
+            if not job_id:
+                continue
+            try:
+                description = self._fetch_job_description(job_id)
+            except Exception:
+                description = None
+            if description:
+                job.description = description
+                job.emails = extract_emails_from_text(description)
+            if index < len(jobs_to_describe) - 1:
+                time.sleep(self.description_sleep_seconds)
+
     def _get_location(self, location: str, is_remote: bool) -> (int, str):
         if not location or is_remote:
             return "11047", "STATE"  # remote options
-        url = f"{self.base_url}/findPopularLocationAjax.htm?maxLocationsToReturn=10&term={location}"
-        res = self.session.get(url)
+        url = f"{self.base_url}/findPopularLocationAjax.htm"
+        res = self.session.get(
+            url,
+            params={
+                "maxLocationsToReturn": 10,
+                "term": location,
+            },
+        )
         if res.status_code != 200:
             if res.status_code == 429:
                 err = f"429 Response - Blocked by Glassdoor for too many requests"

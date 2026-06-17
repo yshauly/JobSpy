@@ -116,12 +116,17 @@ class ZipRecruiter(Scraper):
         jobs_list = res_data.get("jobs", [])
         next_continue_token = res_data.get("continue", None)
         with ThreadPoolExecutor(max_workers=self.jobs_per_page) as executor:
-            job_results = [executor.submit(self._process_job, job) for job in jobs_list]
+            job_results = [
+                executor.submit(self._process_job, job, self.claim_description_slot())
+                for job in jobs_list
+            ]
 
         job_list = list(filter(None, (result.result() for result in job_results)))
         return job_list, next_continue_token
 
-    def _process_job(self, job: dict) -> JobPost | None:
+    def _process_job(
+        self, job: dict, keep_description: bool = False
+    ) -> JobPost | None:
         """
         Processes an individual job dict from the response
         """
@@ -131,13 +136,16 @@ class ZipRecruiter(Scraper):
             return
         self.seen_urls.add(job_url)
 
-        description = job.get("job_description", "").strip()
+        description = job.get("job_description", "").strip() or None
         listing_type = job.get("buyer_type", "")
-        description = (
-            markdown_converter(description)
-            if self.scraper_input.description_format == DescriptionFormat.MARKDOWN
-            else description
-        )
+        if keep_description and description:
+            description = (
+                markdown_converter(description)
+                if self.scraper_input.description_format == DescriptionFormat.MARKDOWN
+                else description
+            )
+        elif not keep_description:
+            description = None
         company = job.get("hiring_company", {}).get("name")
         country_value = "usa" if job.get("job_country") == "US" else "canada"
         country_enum = Country.from_string(country_value)
@@ -154,7 +162,10 @@ class ZipRecruiter(Scraper):
         comp_min = int(job["compensation_min"]) if "compensation_min" in job else None
         comp_max = int(job["compensation_max"]) if "compensation_max" in job else None
         comp_currency = job.get("compensation_currency")
-        description_full, job_url_direct = self._get_descr(job_url)
+        description_full = job_url_direct = None
+        if keep_description:
+            description_full, job_url_direct = self._get_descr(job_url)
+        description_value = description_full if description_full else description
 
         return JobPost(
             id=f'zr-{job["listing_key"]}',
@@ -170,8 +181,10 @@ class ZipRecruiter(Scraper):
             ),
             date_posted=date_posted,
             job_url=job_url,
-            description=description_full if description_full else description,
-            emails=extract_emails_from_text(description) if description else None,
+            description=description_value,
+            emails=extract_emails_from_text(description_value)
+            if description_value
+            else None,
             job_url_direct=job_url_direct,
             listing_type=listing_type,
         )

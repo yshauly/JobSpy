@@ -4,7 +4,7 @@
 
 ## Features
 
-- Scrapes job postings from **LinkedIn**, **Indeed**, **Glassdoor**, **Google**, **ZipRecruiter**, & other job boards concurrently
+- Scrapes job postings from **LinkedIn**, **Indeed**, **Glassdoor**, **Google Jobs**, **Google Careers**, **ZipRecruiter**, & other job boards concurrently
 - Aggregates the job postings in a dataframe
 - Proxies support to bypass blocking
 
@@ -16,7 +16,51 @@
 pip install -U python-jobspy
 ```
 
-_Python version >= [3.10](https://www.python.org/downloads/release/python-3100/) required_
+Optional TLS client for more resilient scraping on restrictive job boards:
+
+```
+pip install -U "python-jobspy[tls]"
+```
+
+_Python versions [3.10](https://www.python.org/downloads/release/python-3100/) through 3.14 supported_
+
+Run the built-in sample scrape:
+
+```
+python -m jobspy
+```
+
+By default, the sample searches all supported job boards for jobs in Israel. When no search term is provided, it uses a broad `jobs` fallback for boards that require a keyword.
+
+The sample enables LinkedIn description fetching by default. To skip full descriptions:
+
+```
+python -m jobspy --no-fetch-description
+```
+
+The built-in Israel search omits a distance radius. To narrow it, pass for example:
+
+```
+python -m jobspy --distance 25
+```
+
+To search only a single board instead of all supported boards:
+
+```
+python -m jobspy --site linkedin
+```
+
+To print every fetched row instead of the default 20-row preview:
+
+```
+python -m jobspy --print-all
+```
+
+After installation, the same entrypoint is also available as:
+
+```
+jobspy
+```
 
 ### Usage
 
@@ -25,7 +69,7 @@ import csv
 from jobspy import scrape_jobs
 
 jobs = scrape_jobs(
-    site_name=["indeed", "linkedin", "zip_recruiter", "google"], # "glassdoor", "bayt", "naukri", "bdjobs"
+    site_name=["indeed", "linkedin", "zip_recruiter", "google"], # "glassdoor", "bayt", "naukri", "bdjobs", "google_careers"
     search_term="software engineer",
     google_search_term="software engineer jobs near San Francisco, CA since yesterday",
     location="San Francisco, CA",
@@ -39,6 +83,16 @@ jobs = scrape_jobs(
 print(f"Found {len(jobs)} jobs")
 print(jobs.head())
 jobs.to_csv("jobs.csv", quoting=csv.QUOTE_NONNUMERIC, escapechar="\\", index=False) # to_excel
+```
+
+Google Careers company searches can also be scraped directly from a careers results URL:
+
+```python
+jobs = scrape_jobs(
+    site_name="google_careers",
+    google_careers_url="https://www.google.com/about/careers/applications/jobs/results/?q=&location=Israel&hl=en",
+    results_wanted=20,
+)
 ```
 
 ### Output
@@ -59,13 +113,17 @@ zip_recruiter Software Developer                 TEKsystems        Phoenix      
 ```plaintext
 Optional
 ├── site_name (list|str): 
-|    linkedin, zip_recruiter, indeed, glassdoor, google, bayt, bdjobs
+|    linkedin, zip_recruiter, indeed, glassdoor, google, google_careers, bayt, bdjobs
 |    (default is all)
 │
 ├── search_term (str)
 |
 ├── google_search_term (str)
 |     search term for google jobs. This is the only param for filtering google jobs.
+│
+├── google_careers_url (str)
+|     direct Google Careers results URL, for example
+|     https://www.google.com/about/careers/applications/jobs/results/?q=&location=Israel&hl=en
 │
 ├── location (str)
 │

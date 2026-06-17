@@ -7,12 +7,31 @@ import pandas as pd
 
 from jobspy.bayt import BaytScraper
 from jobspy.bdjobs import BDJobs
+from jobspy.apple import Apple
+from jobspy.comeet import Comeet
+from jobspy.chromium_cookies import resolve_linkedin_auth_context
+from jobspy.eightfold import Eightfold
+from jobspy.greenhouse import Greenhouse
 from jobspy.glassdoor import Glassdoor
 from jobspy.google import Google
+from jobspy.google_careers import GoogleCareers
 from jobspy.indeed import Indeed
+from jobspy.json_feed import JsonFeed
 from jobspy.linkedin import LinkedIn
+from jobspy.meta import Meta
+from jobspy.microsoft import Microsoft
 from jobspy.naukri import Naukri
-from jobspy.model import JobType, Location, JobResponse, Country
+from jobspy.redhat import RedHat
+from jobspy.varonis import Varonis
+from jobspy.workday import Workday
+from jobspy.model import (
+    JobType,
+    Location,
+    JobResponse,
+    Country,
+    GreenhouseScrapeMode,
+    LinkedInScrapeMode,
+)
 from jobspy.model import SalarySource, ScraperInput, Site
 from jobspy.util import (
     set_logger_level,
@@ -32,6 +51,17 @@ def scrape_jobs(
     site_name: str | list[str] | Site | list[Site] | None = None,
     search_term: str | None = None,
     google_search_term: str | None = None,
+    google_careers_url: str | None = None,
+    comeet_company_url: str | None = None,
+    eightfold_company_url: str | None = None,
+    workday_company_url: str | None = None,
+    redhat_base_url: str | None = None,
+    varonis_base_url: str | None = None,
+    apple_search_url: str | None = None,
+    microsoft_base_url: str | None = None,
+    meta_careers_url: str | None = None,
+    json_feed_url: str | None = None,
+    json_feed_config: dict | None = None,
     location: str | None = None,
     distance: int | None = 50,
     is_remote: bool = False,
@@ -42,13 +72,36 @@ def scrape_jobs(
     proxies: list[str] | str | None = None,
     ca_cert: str | None = None,
     description_format: str = "markdown",
+    description_limit: int | None = 1,
     linkedin_fetch_description: bool | None = False,
     linkedin_company_ids: list[int] | None = None,
+    linkedin_geo_id: int | None = None,
+    linkedin_execution_mode: str | LinkedInScrapeMode = LinkedInScrapeMode.DEFAULT,
+    greenhouse_execution_mode: str | GreenhouseScrapeMode = GreenhouseScrapeMode.DEFAULT,
+    num_of_min: int | None = None,
     offset: int | None = 0,
     hours_old: int = None,
     enforce_annual_salary: bool = False,
     verbose: int = 0,
     user_agent: str = None,
+    linkedin_auth_cookies: dict[str, str] | None = None,
+    indeed_debug_trace: bool = False,
+    comeet_debug_trace: bool = False,
+    eightfold_debug_trace: bool = False,
+    workday_debug_trace: bool = False,
+    redhat_debug_trace: bool = False,
+    varonis_debug_trace: bool = False,
+    greenhouse_auth_cookies: dict[str, str] | None = None,
+    greenhouse_xsrf_token: str | None = None,
+    greenhouse_location_name: str | None = None,
+    greenhouse_lat: float | None = None,
+    greenhouse_lon: float | None = None,
+    greenhouse_location_type: str | None = None,
+    greenhouse_country_short_name: str | None = None,
+    greenhouse_date_posted: str | None = None,
+    greenhouse_debug_trace: bool = False,
+    linkedin_page_delay_min: float | None = None,
+    linkedin_page_delay_max: float | None = None,
     **kwargs,
 ) -> pd.DataFrame:
     """
@@ -61,15 +114,53 @@ def scrape_jobs(
         Site.ZIP_RECRUITER: ZipRecruiter,
         Site.GLASSDOOR: Glassdoor,
         Site.GOOGLE: Google,
+        Site.GOOGLE_CAREERS: GoogleCareers,
+        Site.COMEET: Comeet,
+        Site.GREENHOUSE: Greenhouse,
+        Site.EIGHTFOLD: Eightfold,
+        Site.WORKDAY: Workday,
+        Site.REDHAT: RedHat,
+        Site.VARONIS: Varonis,
+        Site.APPLE: Apple,
+        Site.MICROSOFT: Microsoft,
+        Site.META: Meta,
+        Site.JSON_FEED: JsonFeed,
         Site.BAYT: BaytScraper,
         Site.NAUKRI: Naukri,
         Site.BDJOBS: BDJobs,  # Add BDJobs to the scraper mapping
     }
     set_logger_level(verbose)
     job_type = get_enum_from_value(job_type) if job_type else None
+    linkedin_execution_mode = (
+        LinkedInScrapeMode(linkedin_execution_mode)
+        if isinstance(linkedin_execution_mode, str)
+        else linkedin_execution_mode
+    )
+    greenhouse_execution_mode = (
+        GreenhouseScrapeMode(greenhouse_execution_mode)
+        if isinstance(greenhouse_execution_mode, str)
+        else greenhouse_execution_mode
+    )
 
     def get_site_type():
-        site_types = list(Site)
+        site_types = [
+            site
+            for site in Site
+            if site
+            not in {
+                Site.COMEET,
+                Site.GREENHOUSE,
+                Site.EIGHTFOLD,
+                Site.WORKDAY,
+                Site.REDHAT,
+                Site.VARONIS,
+                Site.APPLE,
+                Site.MICROSOFT,
+                Site.META,
+                Site.GOOGLE_CAREERS,
+                Site.JSON_FEED,
+            }
+        ]
         if isinstance(site_name, str):
             site_types = [map_str_to_site(site_name)]
         elif isinstance(site_name, Site):
@@ -88,22 +179,79 @@ def scrape_jobs(
         country=country_enum,
         search_term=search_term,
         google_search_term=google_search_term,
+        google_careers_url=google_careers_url,
+        comeet_company_url=comeet_company_url,
+        eightfold_company_url=eightfold_company_url,
+        workday_company_url=workday_company_url,
+        redhat_base_url=redhat_base_url,
+        varonis_base_url=varonis_base_url,
+        apple_search_url=apple_search_url,
+        microsoft_base_url=microsoft_base_url,
+        meta_careers_url=meta_careers_url,
+        json_feed_url=json_feed_url,
+        json_feed_config=json_feed_config,
         location=location,
         distance=distance,
         is_remote=is_remote,
         job_type=job_type,
         easy_apply=easy_apply,
         description_format=description_format,
+        description_limit=description_limit,
         linkedin_fetch_description=linkedin_fetch_description,
+        linkedin_geo_id=linkedin_geo_id,
+        linkedin_page_delay_min=linkedin_page_delay_min,
+        linkedin_page_delay_max=linkedin_page_delay_max,
+        linkedin_execution_mode=linkedin_execution_mode,
+        greenhouse_execution_mode=greenhouse_execution_mode,
+        num_of_min=num_of_min,
         results_wanted=results_wanted,
         linkedin_company_ids=linkedin_company_ids,
         offset=offset,
         hours_old=hours_old,
+        indeed_debug_trace=indeed_debug_trace,
+        comeet_debug_trace=comeet_debug_trace,
+        eightfold_debug_trace=eightfold_debug_trace,
+        workday_debug_trace=workday_debug_trace,
+        redhat_debug_trace=redhat_debug_trace,
+        varonis_debug_trace=varonis_debug_trace,
+        greenhouse_location_name=greenhouse_location_name,
+        greenhouse_lat=greenhouse_lat,
+        greenhouse_lon=greenhouse_lon,
+        greenhouse_location_type=greenhouse_location_type,
+        greenhouse_country_short_name=greenhouse_country_short_name,
+        greenhouse_date_posted=greenhouse_date_posted,
+        greenhouse_debug_trace=greenhouse_debug_trace,
     )
+    resolved_linkedin_auth_cookies = linkedin_auth_cookies
+    if (
+        resolved_linkedin_auth_cookies is None
+        and Site.LINKEDIN in scraper_input.site_type
+    ):
+        resolved_linkedin_auth_cookies, _ = resolve_linkedin_auth_context()
 
     def scrape_site(site: Site) -> Tuple[str, JobResponse]:
         scraper_class = SCRAPER_MAPPING[site]
-        scraper = scraper_class(proxies=proxies, ca_cert=ca_cert, user_agent=user_agent)
+        if site == Site.LINKEDIN:
+            scraper = scraper_class(
+                proxies=proxies,
+                ca_cert=ca_cert,
+                user_agent=user_agent,
+                auth_cookies=resolved_linkedin_auth_cookies,
+            )
+        elif site == Site.GREENHOUSE:
+            scraper = scraper_class(
+                proxies=proxies,
+                ca_cert=ca_cert,
+                user_agent=user_agent,
+                auth_cookies=greenhouse_auth_cookies,
+                xsrf_token=greenhouse_xsrf_token,
+            )
+        else:
+            scraper = scraper_class(
+                proxies=proxies,
+                ca_cert=ca_cert,
+                user_agent=user_agent,
+            )
         scraped_data: JobResponse = scraper.scrape(scraper_input)
         cap_name = site.value.capitalize()
         site_name = "ZipRecruiter" if cap_name == "Zip_recruiter" else cap_name

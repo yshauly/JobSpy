@@ -238,10 +238,10 @@ class BDJobs(Scraper):
                 site=self.site,
             )
 
-            # Always fetch description for BDJobs
-            job_details = self._get_job_details(job_url)
-            job_post.description = job_details.get("description", "")
-            job_post.job_type = job_details.get("job_type", "")
+            if self.claim_description_slot():
+                job_details = self._get_job_details(job_url)
+                job_post.description = job_details.get("description")
+                job_post.job_type = job_details.get("job_type")
 
             return job_post
         except Exception as e:

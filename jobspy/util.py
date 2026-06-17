@@ -4,16 +4,23 @@ import logging
 import re
 from itertools import cycle
 
-import numpy as np
 import requests
-import tls_client
 import urllib3
 from markdownify import markdownify as md
 from requests.adapters import HTTPAdapter, Retry
 
 from jobspy.model import CompensationInterval, JobType, Site
 
+try:
+    import tls_client
+except Exception as exc:  # pragma: no cover - depends on optional runtime package
+    tls_client = None
+    TLS_CLIENT_IMPORT_ERROR = exc
+else:
+    TLS_CLIENT_IMPORT_ERROR = None
+
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
+_TLS_FALLBACK_WARNED = False
 
 
 def create_logger(name: str):
@@ -86,21 +93,23 @@ class RequestsRotating(RotatingProxySession, requests.Session):
         return requests.Session.request(self, method, url, **kwargs)
 
 
-class TLSRotating(RotatingProxySession, tls_client.Session):
-    def __init__(self, proxies=None):
-        RotatingProxySession.__init__(self, proxies=proxies)
-        tls_client.Session.__init__(self, random_tls_extension_order=True)
+if tls_client is not None:
 
-    def execute_request(self, *args, **kwargs):
-        if self.proxy_cycle:
-            next_proxy = next(self.proxy_cycle)
-            if next_proxy["http"] != "http://localhost":
-                self.proxies = next_proxy
-            else:
-                self.proxies = {}
-        response = tls_client.Session.execute_request(self, *args, **kwargs)
-        response.ok = response.status_code in range(200, 400)
-        return response
+    class TLSRotating(RotatingProxySession, tls_client.Session):
+        def __init__(self, proxies=None):
+            RotatingProxySession.__init__(self, proxies=proxies)
+            tls_client.Session.__init__(self, random_tls_extension_order=True)
+
+        def execute_request(self, *args, **kwargs):
+            if self.proxy_cycle:
+                next_proxy = next(self.proxy_cycle)
+                if next_proxy["http"] != "http://localhost":
+                    self.proxies = next_proxy
+                else:
+                    self.proxies = {}
+            response = tls_client.Session.execute_request(self, *args, **kwargs)
+            response.ok = response.status_code in range(200, 400)
+            return response
 
 
 def create_session(
@@ -116,9 +125,17 @@ def create_session(
     Creates a requests session with optional tls, proxy, and retry settings.
     :return: A session object
     """
-    if is_tls:
+    global _TLS_FALLBACK_WARNED
+
+    if is_tls and tls_client is not None:
         session = TLSRotating(proxies=proxies)
     else:
+        if is_tls and tls_client is None and not _TLS_FALLBACK_WARNED:
+            create_logger("Session").warning(
+                "tls-client is unavailable (%s); falling back to requests.Session",
+                TLS_CLIENT_IMPORT_ERROR,
+            )
+            _TLS_FALLBACK_WARNED = True
         session = RequestsRotating(
             proxies=proxies,
             has_retry=has_retry,
@@ -199,7 +216,7 @@ def currency_parser(cur_str):
     else:
         num = float(cur_str)
 
-    return np.round(num, 2)
+    return round(num, 2)
 
 
 def remove_attributes(tag):
@@ -298,7 +315,8 @@ def extract_job_type(description: str):
 
 
 def map_str_to_site(site_name: str) -> Site:
-    return Site[site_name.upper()]
+    normalized_name = site_name.strip().replace("-", "_").replace(" ", "_")
+    return Site[normalized_name.upper()]
 
 
 def get_enum_from_value(value_str):
@@ -328,11 +346,13 @@ desired_order = [
     "id",
     "site",
     "job_url",
+    "apply_url",
     "job_url_direct",
     "title",
     "company",
     "location",
     "date_posted",
+    "applications_count",
     "job_type",
     "salary_source",
     "interval",
